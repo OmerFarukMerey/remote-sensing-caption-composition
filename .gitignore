@@ -212,5 +212,9 @@ __marimo__/
 # Data
 /dataset
 
+# Phase 2 artefacts (large, regenerable)
+/precomputed
+/checkpoints
+
 # Archives
 *.zip
