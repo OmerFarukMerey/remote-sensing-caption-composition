@@ -40,7 +40,8 @@ class TrainConfig:
     patience: int = 5
     num_workers: int = 2
     use_wandb: bool = True
-    wandb_project: str = "rs-caption-composition"
+    wandb_project: str = "di725-project"
+    wandb_entity: Optional[str] = "mereyomerfaruk"  # explicit personal entity
     wandb_tags: list[str] = field(default_factory=list)
     checkpoint_dir: str = "checkpoints"
     precomputed_dir: Optional[str] = None  # if set, skip CLIP forward
@@ -178,6 +179,7 @@ def train_one_condition(
 
             run = wandb.init(
                 project=cfg.wandb_project,
+                entity=cfg.wandb_entity,
                 name=f"{cfg.condition}_seed{cfg.seed}",
                 tags=[cfg.condition, f"seed{cfg.seed}"] + cfg.wandb_tags,
                 config={**cfg.__dict__, "device": device, "precomputed": precomputed},
