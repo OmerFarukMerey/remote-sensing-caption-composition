@@ -96,9 +96,10 @@ rs-caption-composition/
 git clone https://github.com/<your-username>/rs-caption-composition.git
 cd rs-caption-composition
 pip install -r requirements.txt
+python -m spacy download en_core_web_sm   # required by the R1 keyword extractor
 ```
 
-Download the dataset from [Zenodo](https://zenodo.org/records/18890661) and place it under `data/` using relative paths as expected by the notebooks.
+Download the dataset from [Zenodo](https://zenodo.org/records/18890661) and place it under `dataset/` using relative paths as expected by the notebooks.
 
 ### Requirements
 
@@ -125,6 +126,14 @@ git+https://github.com/openai/CLIP.git
 | Vision only (baseline) | — |
 | Vision + vision caption | — |
 | Vision + hybrid caption | — |
+
+### Experiment Tracking
+
+All Phase 2 training runs (6 conditions × 3 seeds = 18 runs) are tracked on Weights & Biases:
+
+📊 **W&B project:** [`mereyomerfaruk/di725-project`](https://wandb.ai/mereyomerfaruk/di725-project)
+
+Run names follow the convention `{condition}_seed{seed}` (e.g. `R0a_seed42`, `R2b_seed1337`, `Rrand_seed2024`).
 
 ---
 
