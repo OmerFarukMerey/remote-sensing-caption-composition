@@ -216,5 +216,21 @@ __marimo__/
 /precomputed
 /checkpoints
 
+# W&B local run cache (use the W&B cloud project for history)
+wandb/
+
+# LaTeX build artefacts (keep .tex; .pdf in reports/ stays tracked)
+*.aux
+*.log
+*.out
+*.toc
+*.bbl
+*.blg
+*.synctex.gz
+*.fdb_latexmk
+*.fls
+
 # Archives
 *.zip
+
+DI_725_Term_Project.pdf
