@@ -34,8 +34,8 @@ from torch.utils.data import Dataset
 
 from .sanitize import extract_keywords, mask_numbers
 
-CONDITIONS = ("R0a", "R0b", "R1", "R2a", "R2b")
-Condition = Literal["R0a", "R0b", "R1", "R2a", "R2b"]
+CONDITIONS = ("R0a", "R0b", "R1", "R2a", "R2b", "Rrand")
+Condition = Literal["R0a", "R0b", "R1", "R2a", "R2b", "Rrand"]
 Split = Literal["train", "val", "test"]
 
 COMPOSITION_CLASSES = ("Tree", "Shrub", "Grass", "Crop", "Built-up", "Barren", "Water")
@@ -101,6 +101,12 @@ class ARASDataset(Dataset):
             return mask_numbers(row.get(VISION_GEMMA, ""))
         if c == "R2b":
             return mask_numbers(row.get(VISION_QWEN, ""))
+        if c == "Rrand":
+            raise NotImplementedError(
+                "Rrand is precomputed-only; build random tokens via "
+                "src.precompute.precompute_texts(conditions=('Rrand',)) and "
+                "use PrecomputedARASDataset."
+            )
         return ""
 
     def __len__(self) -> int:

@@ -31,6 +31,8 @@ from .model import _encode_image_patches, _encode_text_tokens
 from .sanitize import extract_keywords, mask_numbers
 
 TEXT_CONDITIONS = ("R0a", "R1", "R2a", "R2b")
+CLIP_VOCAB_SIZE = 49408
+RRAND_SEED = 0
 
 
 def _build_text(condition: str, row: pd.Series) -> str:
@@ -83,6 +85,18 @@ def precompute_images(
 
 
 @torch.no_grad()
+def _rrand_tokens(n: int, seed: int = RRAND_SEED, device: str = "cpu") -> torch.Tensor:
+    """Deterministic random CLIP token IDs of shape (n, 77).
+
+    Random text only makes sense as a sanity control: same tile always gets the
+    same garbage token sequence so the only variance across runs is from model
+    init seeds, not from text noise.
+    """
+    g = torch.Generator(device="cpu").manual_seed(seed)
+    return torch.randint(0, CLIP_VOCAB_SIZE, (n, 77), generator=g, device="cpu").to(device)
+
+
+@torch.no_grad()
 def precompute_texts(
     csv_path: str | Path,
     out_dir: str | Path,
@@ -103,6 +117,17 @@ def precompute_texts(
         paths[cond] = out_path
         if out_path.exists() and not overwrite:
             print(f"[skip] {out_path} exists")
+            continue
+
+        if cond == "Rrand":
+            rrand = _rrand_tokens(n)  # (N, 77) on CPU
+            embeddings = torch.empty(n, 77, 512, dtype=torch.float16)
+            for start in tqdm(range(0, n, batch_size), desc=f"text {cond}"):
+                tokens = rrand[start : start + batch_size].to(device)
+                emb = _encode_text_tokens(clip_model, tokens).to("cpu", torch.float16)
+                embeddings[start : start + tokens.shape[0]] = emb
+            torch.save(embeddings, out_path)
+            print(f"[done] text {cond} (random tokens): {tuple(embeddings.shape)} -> {out_path}")
             continue
 
         texts = [_build_text(cond, row) for _, row in df.iterrows()]

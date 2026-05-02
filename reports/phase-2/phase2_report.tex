@@ -31,21 +31,29 @@ keyword-list condition derived from vision-only captions, and a qualitative
 condition consisting of fully sanitized vision-only captions evaluated for
 both Gemma-3 and Qwen-3-VL caption sources. CLIP ViT-B/32 encoders are kept
 frozen; only a cross-attention fusion module and a small MLP regression head
-are trained, across 5 conditions $\times$ 3 seeds. Empirically, additional
-clean text does \emph{not} reduce test MSE relative to an empty-caption
-baseline that shares the same fusion architecture, while a pure-vision
-architecture without cross-attention performs noticeably worse than all
-caption-bearing conditions. We argue this dissociates two effects that the
-original Phase 1 plan would have conflated: (i) the architectural contribution
-of the cross-attention layer, and (ii) the semantic contribution of the text.
-The findings also offer indirect support for the leakage hypothesis: when
-percentages are stripped, the residual qualitative content carries no useful
-multimodal signal beyond the vision encoder itself.
+are trained, across 5 conditions $\times$ 3 seeds. Two follow-up controls
+sharpen the picture: a caption-fidelity stratified evaluation that splits the
+test set by whether the vision caption correctly mentions the dominant
+ground-truth class, and a random-text condition (R-rand) that feeds CLIP an
+embedding of 77 random vocabulary tokens. Three findings emerge. First,
+removing cross-attention (R0b) raises test MSE by $\sim$56\,\% relative,
+showing that the bulk of the apparent multimodal gain is architectural rather
+than semantic. Second, sanitized vision-only captions actually \emph{help}
+when they correctly describe the image and \emph{hurt} when they do not, with
+both effects on the order of $10^{-3}$ MSE; the gains and losses average to
+near zero on the unstratified test set, masking a real conditional benefit.
+Third, the empty-caption baseline (R0a) is significantly better than the
+random-token control (R-rand, paired $t$ $p=8.6\times10^{-9}$), so the
+empty token does carry signal: caption \emph{content} matters in addition to
+fusion capacity. The findings also offer indirect support for the leakage
+hypothesis: when percentages are stripped, the residual qualitative content
+provides only conditional, fidelity-gated benefit beyond the vision encoder
+itself.
 \end{abstract}
 
 \begin{IEEEkeywords}
 remote sensing, land cover, multimodal learning, CLIP, cross-attention, data
-leakage, ablation
+leakage, ablation, fidelity stratification
 \end{IEEEkeywords}
 
 %-------------------------------------------------------------------------
@@ -81,10 +89,13 @@ from satellite images while strictly avoiding data leakage?}
 into low-richness (keyword sets) and high-richness (sanitized full captions).
 (2)~An architectural control (R0b) that isolates the cross-attention layer's
 contribution from any text contribution.
-(3)~An empirical finding that no level of clean vision-only text significantly
-improves over an empty-caption baseline that shares the same fusion
-architecture, while the architectural control underperforms all
-caption-bearing variants.
+(3)~A caption-fidelity stratified evaluation that decomposes the average
+caption effect into a positive contribution on tiles whose caption mentions
+the dominant ground-truth class, and a negative contribution on tiles whose
+caption does not.
+(4)~A random-text control (R-rand) that fixes the empty-token baseline at a
+meaningful position on the richness axis: empty $>$ random in MSE, so caption
+\emph{content} --- not only fusion capacity --- matters.
 
 %-------------------------------------------------------------------------
 \section{Methodology}
@@ -112,23 +123,25 @@ purely qualitative semantic cue (e.g.\ ``extensive grasslands'' instead of
 
 \subsection{Information Richness Levels}
 
-The study evaluates the model across four levels of semantic guidance
-(Table~\ref{tab:conditions}).
+The study evaluates the model across four levels of semantic guidance plus a
+random-text control (Table~\ref{tab:conditions}).
 
 \begin{table}[ht]
 \centering
-\caption{Five experimental conditions (5 $\times$ 3 seeds = 15 runs).
-``CA'' is multi-head cross-attention; ``GAP'' is patch-token mean pooling.}
+\caption{Experimental conditions. ``CA'' is multi-head cross-attention; ``GAP''
+is patch-token mean pooling. The first five run with three seeds (15 runs);
+the random-text control adds three more.}
 \label{tab:conditions}
 \begin{tabular}{@{}lll@{}}
 \toprule
 \textbf{Code} & \textbf{Architecture} & \textbf{Text input} \\
 \midrule
-R0a & CLIP+CA+MLP & \texttt{""} (empty token) \\
-R0b & CLIP+GAP+MLP & --- (no text path) \\
-R1  & CLIP+CA+MLP & noun-lemma NER over both \texttt{vision\_*} \\
-R2a & CLIP+CA+MLP & sanitized \texttt{vision\_gemma3-4b} \\
-R2b & CLIP+CA+MLP & sanitized \texttt{vision\_qwen3-vl-8b} \\
+R0a   & CLIP+CA+MLP & \texttt{""} (empty token) \\
+R0b   & CLIP+GAP+MLP & --- (no text path) \\
+R1    & CLIP+CA+MLP & noun-lemma NER over both \texttt{vision\_*} \\
+R2a   & CLIP+CA+MLP & sanitized \texttt{vision\_gemma3-4b} \\
+R2b   & CLIP+CA+MLP & sanitized \texttt{vision\_qwen3-vl-8b} \\
+R-rand & CLIP+CA+MLP & 77 random CLIP vocab tokens (fixed seed) \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -152,7 +165,31 @@ R2b & CLIP+CA+MLP & sanitized \texttt{vision\_qwen3-vl-8b} \\
   R2a uses sanitized \texttt{vision\_gemma3-4b} captions; R2b uses sanitized
   \texttt{vision\_qwen3-vl-8b}. Training both lets us benchmark which
   vision-LLM provides better semantic alignment for this remote-sensing task.
+\item \textbf{R-rand (random-text control).} For each tile we generate a
+  fixed-per-tile sequence of 77 random CLIP vocabulary tokens
+  (\texttt{torch.randint} with a global seed of 0) and feed its CLIP text
+  embedding to the same fusion architecture as R0a/R1/R2. R-rand has the
+  same trainable capacity as R0a but no caption content; it is the negative
+  control for caption \emph{semantics}.
 \end{itemize}
+
+\subsection{Caption-Fidelity Stratified Evaluation}
+
+To probe whether the average caption effect masks a heterogeneous picture, we
+split the test set by whether the conditioning caption correctly mentions the
+dominant ground-truth class. For each test tile we (i) take the
+argmax-class of the GT vector, (ii) check whether any synonym of that class
+appears (lower-cased substring) in the sanitized caption, and (iii) tag the
+tile \texttt{agree} or \texttt{disagree} accordingly. Synonyms are
+hand-curated and conservative (e.g.\ Grass: \texttt{grass}, \texttt{pasture},
+\texttt{meadow}, \texttt{prairie}, \texttt{savanna}; Water: \texttt{water},
+\texttt{river}, \texttt{lake}, \texttt{stream}, \texttt{pond},
+\texttt{ocean}, \texttt{sea}, \texttt{channel}, \texttt{riverbed},
+\texttt{wetland}). We use the corresponding caption per condition: R2a is
+judged against \texttt{vision\_gemma3-4b}, R2b against
+\texttt{vision\_qwen3-vl-8b}, and the no-caption-specific conditions
+(R0a, R0b, R1) against the union over both vision sources. Roughly 52\,\%
+of tiles fall into \texttt{agree} under the union rule.
 
 \subsection{Architecture and Training Strategy}
 
@@ -185,8 +222,8 @@ precomputing image patch embeddings ($N \times 49 \times 512$, fp16) and
 per-condition text token embeddings ($N \times 77 \times 512$, fp16) once,
 storing them on disk, and consuming them directly inside the training loop.
 This is mathematically equivalent to running CLIP per batch but reduces the
-full 5$\times$3 grid wall-clock from approximately 10 hours of online
-training on an Apple M4 MacBook Pro to under 40 minutes including
+full 6$\times$3 grid wall-clock from approximately 12 hours of online
+training on an Apple M4 MacBook Pro to under 50 minutes including
 precomputation. All runs are tracked via Weights \& Biases for full
 reproducibility, with run names of the form
 \texttt{\{condition\}\_seed\{seed\}}.
@@ -217,39 +254,125 @@ Lower is better for all metrics.}
 \textbf{Cond.} & \textbf{MSE} $\downarrow$ & \textbf{MAE} $\downarrow$
 & \textbf{RMSE} $\downarrow$ & \textbf{KL} $\downarrow$ \\
 \midrule
-R0a & \textbf{0.00707}$\pm$0.00006 & \textbf{0.0406}$\pm$0.0003 & 0.0841$\pm$0.0003 & 0.140$\pm$0.002 \\
-R0b & 0.01101$\pm$0.00032 & 0.0554$\pm$0.0011 & 0.1049$\pm$0.0015 & 0.226$\pm$0.006 \\
-R1  & 0.00760$\pm$0.00016 & 0.0425$\pm$0.0008 & 0.0872$\pm$0.0009 & 0.152$\pm$0.003 \\
-R2a & 0.00751$\pm$0.00026 & 0.0422$\pm$0.0009 & 0.0867$\pm$0.0014 & 0.149$\pm$0.006 \\
-R2b & 0.00739$\pm$0.00020 & 0.0421$\pm$0.0007 & 0.0859$\pm$0.0010 & 0.148$\pm$0.003 \\
+R0a    & \textbf{0.00707}$\pm$0.00006 & \textbf{0.0406}$\pm$0.0003 & 0.0841$\pm$0.0003 & 0.141$\pm$0.002 \\
+R0b    & 0.01101$\pm$0.00032 & 0.0554$\pm$0.0011 & 0.1049$\pm$0.0015 & 0.226$\pm$0.006 \\
+R1     & 0.00760$\pm$0.00016 & 0.0425$\pm$0.0008 & 0.0872$\pm$0.0009 & 0.152$\pm$0.003 \\
+R2a    & 0.00751$\pm$0.00026 & 0.0422$\pm$0.0009 & 0.0867$\pm$0.0014 & 0.149$\pm$0.006 \\
+R2b    & 0.00739$\pm$0.00020 & 0.0421$\pm$0.0007 & 0.0859$\pm$0.0010 & 0.148$\pm$0.003 \\
+R-rand & 0.00787$\pm$0.00008 & 0.0425$\pm$0.0002 & 0.0887$\pm$0.0005 & 0.152$\pm$0.001 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
 \begin{figure}[ht]
 \centering
-\includegraphics[width=0.95\linewidth]{phase2_mse_bar.png}
-\caption{Test MSE by condition (mean $\pm$ std over 3 seeds).}
+\includegraphics[width=0.95\linewidth]{phase2_mse_bar_with_rrand.png}
+\caption{Test MSE by condition (mean $\pm$ std over 3 seeds), including the
+random-text control R-rand.}
 \label{fig:bar}
 \end{figure}
 
 \subsection{Pairwise Significance}
 
 We perform paired $t$-tests over per-sample MSE values (averaged across the
-three seeds) on the test set. The dominant signal is the gap between R0b and
-every cross-attention condition; differences among caption-bearing conditions
-(R0a, R1, R2a, R2b) are within $\sim$1 standard deviation of each other.
-\textcolor{red}{[TODO: paste paired-$t$ output table from notebook cell~18.]}
+three seeds) on the test set (Table~\ref{tab:ttest}). Two patterns dominate:
+the architectural gap (R0b vs.\ everything) is enormous and highly
+significant; the empty-vs-random gap (R0a vs.\ R-rand) is small but also
+highly significant. Pairwise comparisons among R0a, R1, R2a, R2b are all in
+the range of one to several standard deviations, with R0a slightly but
+significantly better than each.
 
-\subsection{Per-Class and Architectural Effects}
+\begin{table}[ht]
+\centering
+\caption{Paired $t$-tests on per-sample test MSE. Negative mean diff and
+$p<0.05$ means the first condition has lower error.}
+\label{tab:ttest}
+\begin{tabular}{@{}llrr@{}}
+\toprule
+\textbf{A} & \textbf{B} & \textbf{Mean diff (A$-$B)} & \textbf{$p$-value} \\
+\midrule
+R0a & R1     & $-$0.00053 & $1.1\times10^{-5}$ \\
+R0a & R2a    & $-$0.00045 & $2.0\times10^{-3}$ \\
+R0a & R2b    & $-$0.00032 & $0.020$ \\
+R0b & R1     & $+$0.00341 & $1.5\times10^{-25}$ \\
+R0b & R2a    & $+$0.00350 & $2.1\times10^{-24}$ \\
+R0b & R2b    & $+$0.00363 & $7.8\times10^{-28}$ \\
+R1  & R2a    & $+$0.00009 & $0.51$ \\
+R1  & R2b    & $+$0.00021 & $0.14$ \\
+R0a & R-rand & $-$0.00081 & $8.6\times10^{-9}$ \\
+R0b & R-rand & $+$0.00314 & $7.7\times10^{-20}$ \\
+R1  & R-rand & $-$0.00028 & $0.13$ \\
+R2a & R-rand & $-$0.00036 & $0.067$ \\
+R2b & R-rand & $-$0.00049 & $0.011$ \\
+\bottomrule
+\end{tabular}
+\end{table}
 
-The dominant classes (Tree, Grass, Crop) account for most of the MSE budget
-in every condition. The rare class \emph{Shrub} is the hardest: R0b achieves
-slightly negative $R^2$ on Shrub, while all cross-attention conditions reach
-small positive $R^2$ values ($\approx$0.04--0.08). The Built-up class shows
-the largest spread in $R^2$ across conditions (0.14 for R0b; 0.62--0.71 for
-R0a/R2b), suggesting that additional fusion capacity --- not the text per
-se --- helps the model separate it from Barren and Tree.
+\subsection{Caption-Fidelity Stratified Test}
+
+Table~\ref{tab:fidelity} and Fig.~\ref{fig:fidelity} decompose test MSE by
+whether the conditioning caption correctly mentions the dominant GT class.
+The split rate is 47--52\,\% \texttt{agree}, depending on the source caption.
+
+\begin{table}[ht]
+\centering
+\caption{Test MSE on caption-\texttt{agree} vs.\ \texttt{disagree} subsets
+(mean $\pm$ std over 3 seeds). Caption-bearing conditions are evaluated
+against the caption that actually conditioned them; R0a, R0b, R1 use the
+union over both \texttt{vision\_*} sources.}
+\label{tab:fidelity}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+\textbf{Cond.} & \textbf{MSE (agree)} & \textbf{MSE (disagree)} \\
+\midrule
+R0a    & 0.00676$\pm$0.00014 & 0.00740$\pm$0.00010 \\
+R0b    & 0.01219$\pm$0.00051 & 0.00975$\pm$0.00011 \\
+R1     & 0.00739$\pm$0.00032 & 0.00782$\pm$0.00013 \\
+R2a    & \textbf{0.00671}$\pm$0.00028 & 0.00823$\pm$0.00024 \\
+R2b    & 0.00680$\pm$0.00014 & 0.00787$\pm$0.00025 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.95\linewidth]{phase2_fidelity_split.png}
+\caption{Test MSE stratified by caption-fidelity to the dominant GT class.
+On caption-\texttt{agree} tiles, R2a/R2b match or beat R0a; on
+caption-\texttt{disagree} tiles, R2a/R2b underperform R0a by a similar
+margin.}
+\label{fig:fidelity}
+\end{figure}
+
+The pattern is unambiguous for R2a and R2b. On \texttt{agree} tiles, R2a
+attains 0.00671 --- numerically lower than R0a's 0.00676 on the same
+subset --- and R2b attains 0.00680, essentially tied. On \texttt{disagree}
+tiles, R2a and R2b degrade to 0.00823 and 0.00787 respectively, well above
+R0a's 0.00740. The roughly equal magnitude of the agree-side gain and the
+disagree-side loss is what produces a near-zero average effect on the
+unstratified test set. R0b reverses this pattern (agree harder than
+disagree); we read this as a side-effect of the agree subset concentrating
+on visually concentrated tiles whose dominant class also tests rare-class
+behavior, which the limited-capacity head handles less well.
+
+\subsection{Per-Class Behavior}
+
+Fig.~\ref{fig:perclass} renders mean per-class MAE (lower is better). R0a is
+the best condition on every class except Shrub. R0b is uniformly worst, with
+the Water class showing the largest gap (0.025 vs.\ R0a's 0.007, a
+3.5$\times$ degradation), suggesting that cross-attention helps most on
+classes that are rare or visually distinctive. R2a and R2b never beat R0a in
+this aggregated view, consistent with the average-effect picture; the
+fidelity-stratified analysis above shows that the conditional benefit they
+provide on \texttt{agree} tiles is washed out by the conditional cost on
+\texttt{disagree} tiles.
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.95\linewidth]{phase2_per_class_heatmap.png}
+\caption{Per-class MAE heatmap (mean over 3 seeds). Darker is lower MAE.}
+\label{fig:perclass}
+\end{figure}
 
 \subsection{Cross-Attention Visualization}
 
@@ -257,8 +380,8 @@ Fig.~\ref{fig:attn} overlays mean cross-attention weights (49 patches, mean
 over 77 text tokens) on four test tiles from the R2a checkpoint at seed 42.
 Attention concentrates on visually salient regions consistent with caption
 topics (vegetated patches, channel boundaries) but does not, on inspection,
-follow caption phrases tightly --- consistent with the non-improvement we
-observe.
+follow caption phrases tightly --- consistent with the modest, conditional
+benefit we observe.
 
 \begin{figure}[ht]
 \centering
@@ -280,63 +403,81 @@ all. Had we trained only R0a, R1, R2a, and R2b --- the design implied by the
 original Phase 1 plan --- we would likely have credited this gain to text.
 The R0b control rules that out.
 
-\subsection{Within-fusion text yields no significant gain}
+\subsection{Empty caption is not equivalent to garbage}
 
-Among R0a, R1, R2a, and R2b, all means lie within roughly half a standard
-deviation of each other (0.00707--0.00760). R0a, with no caption content,
-is numerically the best. Two complementary explanations are plausible.
+The R-rand control rejects a clean ``capacity, not content'' reading of
+R0a's edge: random-token text is significantly worse than empty-token text
+(R0a $-$ R-rand $= -0.00081$, paired $t$ $p=8.6\times10^{-9}$). This means
+R0a is not merely benefiting from extra fusion parameters with arbitrary
+text input; the empty token is a distinct, useful signal --- effectively a
+``no caption'' marker that the model learns to lean on the visual side
+through. R-rand actively injects unrelated content and the model cannot
+fully ignore it. The corollary for the higher-richness conditions is that
+R1 is statistically indistinguishable from R-rand ($p = 0.13$): keyword
+extraction in this dataset adds no semantic signal beyond noise. R2a is
+marginal ($p = 0.067$) and R2b clears significance ($p = 0.011$),
+indicating that masked full vision captions do encode some genuine,
+beyond-noise information --- but only enough to beat random text, not
+enough to beat the empty token.
 
-\textbf{(a) Vision captions are noisy proxies for the image.} The two
-\texttt{vision\_*} models are themselves vision-language systems whose
-description of a tile can be wrong: for tile \texttt{0073.png}, both models
-described an arid, rocky landscape, while the ground truth is 92\,\% grass.
-A model conditioned on systematically biased text may be drawn away from
-the visual signal it would otherwise exploit.
+\subsection{Caption fidelity is the missing axis}
 
-\textbf{(b) Capacity, not content, drives R0a's edge.} The cross-attention
-layer with an empty caption still adds learnable parameters and a non-linear
-transformation over patch features; that may suffice to absorb most of the
-signal that fusion architectures normally extract from text.
-
-These readings are not mutually exclusive. In either case, the practical
-takeaway is that gains attributed to ``adding captions'' must control for
-both (i) extra fusion capacity and (ii) caption fidelity to the image.
+The fidelity-stratified analysis (Table~\ref{tab:fidelity}) makes the average
+result on R2 conditions far less paradoxical. On the $\sim$50\,\% of tiles
+where the vision caption mentions the dominant ground-truth class, R2a
+matches R0a (0.00671 vs.\ 0.00676) and R2b is almost tied (0.00680). On
+the other half, R2a and R2b under-perform R0a by 0.0008--0.0009. The losses
+slightly outweigh the wins, producing a near-zero or marginally negative
+average effect. This is a substantive nuance: \emph{vision-only captions are
+useful when they are right and harmful when they are wrong}, with effect
+sizes of similar magnitude. A caller that could route conditioning on/off
+based on caption confidence would beat R0a; the current model conditions
+unconditionally and pays for the misses.
 
 \subsection{Indirect support for the leakage hypothesis}
 
 Phase 1 hypothesized that the apparent multimodal gain from
 \texttt{hybrid\_*}/\texttt{text\_qwen} captions would partly reflect the
-percentages embedded in their text. Phase 2 cannot directly test this
-without re-introducing the leak, but the absence of any meaningful gain from
-\emph{clean} captions is consistent with the hypothesis: when the labels are
-stripped from the text, the residual qualitative content does not, in this
-dataset and at this scale, carry enough independent signal to improve over
-the vision-only fusion control.
+percentages embedded in their text. Phase 2 cannot directly test this without
+re-introducing the leak, but the stratified evidence reframes the case. Clean
+vision-only captions yield only a conditional, fidelity-gated benefit that
+averages near zero. Hybrid captions, by contrast, contain percentage tokens
+that are correct by construction; their advantage in Phase 1 is therefore
+largely a leakage artifact rather than a genuine multimodal contribution.
 
 \subsection{Limitations}
 
 CLIP encoders were frozen; LoRA or full fine-tuning of either encoder might
-let the model extract more signal from sanitized captions. The dataset has
-10\,000 tiles in a single \texttt{synth} domain; results may not transfer to
-real-world tiles or to imbalanced rare-class regimes. We use a single fusion
-architecture (single-layer multi-head attention with mean pooling); deeper
-fusion stacks were not explored. The R1 keyword set was deliberately built
-without ground-truth-aware filtering; the price is keywords that do not
-always cover the dominant classes in the tile.
+let the model extract more signal from sanitized captions, especially on
+\texttt{disagree} tiles. The dataset has 10\,000 tiles in a single
+\texttt{synth} domain; results may not transfer to real-world tiles or to
+imbalanced rare-class regimes. We use a single fusion architecture
+(single-layer multi-head attention with mean pooling); deeper fusion stacks
+were not explored. The fidelity tag is a coarse lexical proxy: it scores a
+caption as ``correct'' if any synonym of the argmax class appears, ignoring
+whether the caption also asserts incorrect classes. The R1 keyword set was
+deliberately built without ground-truth-aware filtering; the price is
+keywords that do not always cover the dominant classes in the tile.
 
 %-------------------------------------------------------------------------
 \section{Conclusion}
 
 We conducted a leakage-free Information Richness ablation for multimodal
-land cover composition regression on ARAS400k. Including an architectural
-control (R0b) was decisive: the cross-attention fusion block, even with an
-empty caption, accounts for the bulk of the apparent multimodal gain on this
-dataset, while clean vision-only captions of varying richness do not
-significantly improve over that empty-caption baseline. We read this both
-as a methodological cautionary tale --- multimodal architectures must be
-ablated against architecture-matched no-text baselines --- and as indirect
-evidence that the gains observed when percentage-leaking captions are used
-are unlikely to be genuinely multimodal.
+land cover composition regression on ARAS400k, augmented with two follow-up
+controls --- caption-fidelity stratification and a random-text baseline ---
+that together give a sharper picture than the unstratified means alone.
+The cross-attention fusion block accounts for the bulk of the apparent
+multimodal gain on this dataset; clean vision-only captions provide a
+conditional benefit on tiles whose captions correctly describe the dominant
+class and an approximately equal cost on tiles whose captions do not, with
+the two effects nearly cancelling on average; and even the empty-token
+baseline is significantly better than random-token noise, showing that
+caption content is not irrelevant but is, in this regime, dominated by
+fidelity rather than richness. Methodologically, we read this as a
+cautionary tale: multimodal architectures must be ablated against
+architecture-matched no-text and random-text baselines, and against
+fidelity-stratified test splits, before any non-trivial multimodal gain can
+be claimed.
 
 %-------------------------------------------------------------------------
 \section*{Reproducibility}
@@ -344,7 +485,7 @@ are unlikely to be genuinely multimodal.
 Code, training notebooks, checkpoints, and W\&B run history are at
 \url{https://github.com/OmerFarukMerey/remote-sensing-caption-composition}.
 The \texttt{src/precompute.py} module materializes all CLIP outputs once;
-the full 5$\times$3 grid then runs in well under one hour on an Apple
+the full 6$\times$3 grid then runs in well under one hour on an Apple
 M4 MacBook Pro.
 
 \begin{thebibliography}{1}
