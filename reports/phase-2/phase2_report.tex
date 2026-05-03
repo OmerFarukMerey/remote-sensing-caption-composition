@@ -46,6 +46,15 @@ cross-attention, data leakage, ablation
 \section{Methodology}
 \label{sec:method}
 
+\textbf{Phase 1 recap.} Phase 1 proposed a CLIP-based architecture in
+which ViT-B/32 patch tokens (Q) attend over CLIP text-encoder tokens
+(K/V) through an 8-head cross-attention block, followed by mean-pooling
+and a softmax MLP head that regresses the seven composition percentages
+on ARAS400k. A proof-of-concept notebook validated the forward pass on a
+single sample without training. Phase 2 builds the first end-to-end
+training of this architecture, but only after addressing the data-leakage
+flag described next.
+
 \textbf{Research question.} \emph{How does the semantic richness of
 auxiliary text captions --- ranging from a vision-only baseline, to simple
 keywords, to detailed qualitative descriptions --- impact land-cover
