@@ -1,9 +1,10 @@
-"""ARAS400k PyTorch dataset with leakage-free 5-condition text routing.
+"""ARAS400k PyTorch dataset with per-condition text routing.
 
 Two modes:
 
 * **Online** — load PIL images and CLIP-tokenize captions on the fly. Use this
-  when the encoder is also trained or when you don't want to precompute.
+  when the encoder is also trained (Phase 3 LoRA) or when you don't want to
+  precompute.
 * **Precomputed** — read frozen CLIP patch / text embeddings produced by
   `src.precompute`. Eliminates the CLIP forward from the training loop and is
   the recommended path on M-series Macs (5–10× faster).
@@ -18,6 +19,8 @@ R0b   : no caption     (pure-vision architecture)
 R1    : keyword string from NER over both vision_* captions
 R2a   : masked vision_gemma3-4b
 R2b   : masked vision_qwen3-vl-8b
+Rrand : random CLIP tokens (precomputed-only negative control)
+Rleak : raw hybrid_gemma3-4b WITH GT percentages (Phase 3 leakage control)
 """
 
 from __future__ import annotations
@@ -34,13 +37,15 @@ from torch.utils.data import Dataset
 
 from .sanitize import extract_keywords, mask_numbers
 
-CONDITIONS = ("R0a", "R0b", "R1", "R2a", "R2b", "Rrand")
-Condition = Literal["R0a", "R0b", "R1", "R2a", "R2b", "Rrand"]
+CONDITIONS = ("R0a", "R0b", "R1", "R2a", "R2b", "Rrand", "Rleak")
+Condition = Literal["R0a", "R0b", "R1", "R2a", "R2b", "Rrand", "Rleak"]
 Split = Literal["train", "val", "test"]
 
 COMPOSITION_CLASSES = ("Tree", "Shrub", "Grass", "Crop", "Built-up", "Barren", "Water")
 VISION_GEMMA = "vision_gemma3-4b"
 VISION_QWEN = "vision_qwen3-vl-8b"
+HYBRID_GEMMA = "hybrid_gemma3-4b"  # Phase 3 leakage control: contains GT percentages
+PCT_SCALE = 100.0  # composition columns are 0-100 percentages; normalise to a 0-1 simplex
 
 
 def make_splits(
@@ -101,6 +106,10 @@ class ARASDataset(Dataset):
             return mask_numbers(row.get(VISION_GEMMA, ""))
         if c == "R2b":
             return mask_numbers(row.get(VISION_QWEN, ""))
+        if c == "Rleak":
+            # Phase 3 leakage control: raw hybrid caption WITH GT percentages,
+            # intentionally NOT sanitized.
+            return str(row.get(HYBRID_GEMMA, ""))
         if c == "Rrand":
             raise NotImplementedError(
                 "Rrand is precomputed-only; build random tokens via "
@@ -121,7 +130,7 @@ class ARASDataset(Dataset):
         gt = torch.tensor(
             [float(row[c]) for c in COMPOSITION_CLASSES],
             dtype=torch.float32,
-        ) / 100.0
+        ) / PCT_SCALE
 
         if self.condition == "R0b":
             return {"image": image, "gt": gt, "filename": row["filename"]}
@@ -190,7 +199,7 @@ class PrecomputedARASDataset(Dataset):
         gt = torch.tensor(
             [float(row[c]) for c in COMPOSITION_CLASSES],
             dtype=torch.float32,
-        ) / 100.0
+        ) / PCT_SCALE
 
         out = {
             "patches": self.images[global_idx].float(),

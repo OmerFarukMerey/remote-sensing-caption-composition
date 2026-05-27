@@ -26,8 +26,8 @@ import torch
 from PIL import Image
 from tqdm.auto import tqdm
 
-from .dataset import VISION_GEMMA, VISION_QWEN
-from .model import _encode_image_patches, _encode_text_tokens
+from .dataset import HYBRID_GEMMA, VISION_GEMMA, VISION_QWEN
+from .model import EMBED_DIM, MAX_TOKENS, NUM_PATCHES, _encode_image_patches, _encode_text_tokens
 from .sanitize import extract_keywords, mask_numbers
 
 TEXT_CONDITIONS = ("R0a", "R1", "R2a", "R2b")
@@ -44,6 +44,9 @@ def _build_text(condition: str, row: pd.Series) -> str:
         return mask_numbers(row.get(VISION_GEMMA, ""))
     if condition == "R2b":
         return mask_numbers(row.get(VISION_QWEN, ""))
+    if condition == "Rleak":
+        # Leakage control: raw hybrid caption WITH GT percentages, unsanitized.
+        return str(row.get(HYBRID_GEMMA, ""))
     raise ValueError(condition)
 
 
@@ -68,7 +71,7 @@ def precompute_images(
     df = pd.read_csv(csv_path)
     images_dir = Path(images_dir)
     n = len(df)
-    embeddings = torch.empty(n, 49, 512, dtype=torch.float16)
+    embeddings = torch.empty(n, NUM_PATCHES, EMBED_DIM, dtype=torch.float16)
 
     for start in tqdm(range(0, n, batch_size), desc="image embed"):
         rows = df.iloc[start : start + batch_size]
@@ -93,7 +96,7 @@ def _rrand_tokens(n: int, seed: int = RRAND_SEED, device: str = "cpu") -> torch.
     init seeds, not from text noise.
     """
     g = torch.Generator(device="cpu").manual_seed(seed)
-    return torch.randint(0, CLIP_VOCAB_SIZE, (n, 77), generator=g, device="cpu").to(device)
+    return torch.randint(0, CLIP_VOCAB_SIZE, (n, MAX_TOKENS), generator=g, device="cpu").to(device)
 
 
 @torch.no_grad()
@@ -121,7 +124,7 @@ def precompute_texts(
 
         if cond == "Rrand":
             rrand = _rrand_tokens(n)  # (N, 77) on CPU
-            embeddings = torch.empty(n, 77, 512, dtype=torch.float16)
+            embeddings = torch.empty(n, MAX_TOKENS, EMBED_DIM, dtype=torch.float16)
             for start in tqdm(range(0, n, batch_size), desc=f"text {cond}"):
                 tokens = rrand[start : start + batch_size].to(device)
                 emb = _encode_text_tokens(clip_model, tokens).to("cpu", torch.float16)
@@ -131,7 +134,7 @@ def precompute_texts(
             continue
 
         texts = [_build_text(cond, row) for _, row in df.iterrows()]
-        embeddings = torch.empty(n, 77, 512, dtype=torch.float16)
+        embeddings = torch.empty(n, MAX_TOKENS, EMBED_DIM, dtype=torch.float16)
         for start in tqdm(range(0, n, batch_size), desc=f"text {cond}"):
             chunk = texts[start : start + batch_size]
             tokens = tokenizer(chunk, truncate=True).to(device)

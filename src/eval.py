@@ -42,12 +42,30 @@ def predict_split(
     split: str = "test",
     batch_size: int = 32,
     precomputed_dir: Optional[str | Path] = None,
+    lora: bool = False,
+    lora_r: int = 8,
+    lora_alpha: int = 16,
+    lora_last_k: int = 6,
 ):
-    precomputed = precomputed_dir is not None
+    # LoRA checkpoints need the same adapters injected before loading weights;
+    # they also force the online (non-precomputed) path.
+    precomputed = precomputed_dir is not None and not lora
     if precomputed:
         ds = PrecomputedARASDataset(csv_path, precomputed_dir, split, condition)
         loader = DataLoader(ds, batch_size=batch_size, shuffle=False, collate_fn=_collate_precomputed)
         model = build_model(condition, clip_model=None).to(device)
+    elif lora:
+        import copy as _copy
+        from .lora import inject_lora
+
+        ds = ARASDataset(csv_path, images_dir, split, condition, image_transform, tokenizer)
+        loader = DataLoader(ds, batch_size=batch_size, shuffle=False, collate_fn=_collate_online)
+        encoder = _copy.deepcopy(clip_model)
+        inject_lora(
+            encoder, r=lora_r, alpha=lora_alpha, dropout=0.0,
+            last_k_blocks=lora_last_k, vision=True, text=(condition != "R0b"),
+        )
+        model = build_model(condition, clip_model=encoder, freeze_encoder=False).to(device)
     else:
         ds = ARASDataset(csv_path, images_dir, split, condition, image_transform, tokenizer)
         loader = DataLoader(ds, batch_size=batch_size, shuffle=False, collate_fn=_collate_online)
@@ -55,7 +73,7 @@ def predict_split(
 
     state = torch.load(ckpt_path, map_location=device)
     missing, unexpected = model.load_state_dict(state["state_dict"], strict=False)
-    # CLIP weights are intentionally missing (we share a frozen CLIP outside).
+    # Frozen CLIP base weights are intentionally absent from the checkpoint.
     model.eval()
 
     preds, gts, fns = [], [], []

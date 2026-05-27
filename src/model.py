@@ -13,11 +13,22 @@ Each model exposes two forward paths:
 
 from __future__ import annotations
 
+import contextlib
+
 import torch
 import torch.nn as nn
 
 NUM_CLASSES = 7
-EMBED_DIM = 512  # ViT-B/32 shared embedding
+EMBED_DIM = 512        # ViT-B/32 shared embedding dimension
+NUM_PATCHES = 49       # 7x7 patch grid from ViT-B/32 at 224px (CLS dropped)
+MAX_TOKENS = 77        # CLIP text context length
+NUM_HEADS = 8          # cross-attention heads
+HIDDEN_DIM = 256       # regression-head hidden width
+
+
+def _encoder_grad_ctx(freeze: bool):
+    """No-grad when the encoder is frozen; pass-through when LoRA-trainable."""
+    return torch.no_grad() if freeze else contextlib.nullcontext()
 
 
 def _encode_image_patches(clip_model, images: torch.Tensor) -> torch.Tensor:
@@ -54,7 +65,7 @@ def _encode_text_tokens(clip_model, tokens: torch.Tensor) -> torch.Tensor:
 
 
 class _RegressionHead(nn.Sequential):
-    def __init__(self, in_dim: int = EMBED_DIM, hidden: int = 256, out_dim: int = NUM_CLASSES):
+    def __init__(self, in_dim: int = EMBED_DIM, hidden: int = HIDDEN_DIM, out_dim: int = NUM_CLASSES):
         super().__init__(
             nn.Linear(in_dim, hidden),
             nn.ReLU(),
@@ -66,10 +77,11 @@ class _RegressionHead(nn.Sequential):
 class MultimodalRegressor(nn.Module):
     """Cross-attention fusion model used for R0a, R1, R2a, R2b."""
 
-    def __init__(self, clip_model=None, num_heads: int = 8):
+    def __init__(self, clip_model=None, num_heads: int = NUM_HEADS, freeze_encoder: bool = True):
         super().__init__()
         self.clip_model = clip_model
-        if clip_model is not None:
+        self.freeze_encoder = freeze_encoder
+        if clip_model is not None and freeze_encoder:
             for p in self.clip_model.parameters():
                 p.requires_grad_(False)
 
@@ -79,7 +91,12 @@ class MultimodalRegressor(nn.Module):
         self.head = _RegressionHead()
 
     def trainable_parameters(self):
-        return list(self.cross_attn.parameters()) + list(self.head.parameters())
+        params = list(self.cross_attn.parameters()) + list(self.head.parameters())
+        if self.clip_model is not None and not self.freeze_encoder:
+            # LoRA adapters injected into the encoder are the only grad-enabled
+            # CLIP params (base weights stay frozen by inject_lora).
+            params += [p for p in self.clip_model.parameters() if p.requires_grad]
+        return params
 
     def forward_emb(
         self,
@@ -105,7 +122,7 @@ class MultimodalRegressor(nn.Module):
                 "MultimodalRegressor was built without a clip_model; "
                 "call forward_emb(patches, text_emb) instead."
             )
-        with torch.no_grad():
+        with _encoder_grad_ctx(self.freeze_encoder):
             patches = _encode_image_patches(self.clip_model, images)
             text = _encode_text_tokens(self.clip_model, tokens)
         return self.forward_emb(patches, text, return_attention=return_attention)
@@ -114,16 +131,20 @@ class MultimodalRegressor(nn.Module):
 class VisionOnlyRegressor(nn.Module):
     """Pure-vision baseline used for R0b. No text path, no cross-attention."""
 
-    def __init__(self, clip_model=None):
+    def __init__(self, clip_model=None, freeze_encoder: bool = True):
         super().__init__()
         self.clip_model = clip_model
-        if clip_model is not None:
+        self.freeze_encoder = freeze_encoder
+        if clip_model is not None and freeze_encoder:
             for p in self.clip_model.parameters():
                 p.requires_grad_(False)
         self.head = _RegressionHead()
 
     def trainable_parameters(self):
-        return list(self.head.parameters())
+        params = list(self.head.parameters())
+        if self.clip_model is not None and not self.freeze_encoder:
+            params += [p for p in self.clip_model.parameters() if p.requires_grad]
+        return params
 
     def forward_emb(self, patches: torch.Tensor):
         pooled = patches.mean(dim=1)
@@ -135,18 +156,19 @@ class VisionOnlyRegressor(nn.Module):
                 "VisionOnlyRegressor was built without a clip_model; "
                 "call forward_emb(patches) instead."
             )
-        with torch.no_grad():
+        with _encoder_grad_ctx(self.freeze_encoder):
             patches = _encode_image_patches(self.clip_model, images)
         return self.forward_emb(patches)
 
 
-def build_model(condition: str, clip_model=None) -> nn.Module:
+def build_model(condition: str, clip_model=None, freeze_encoder: bool = True) -> nn.Module:
     """Build the right regressor for `condition`.
 
     Pass `clip_model=None` when training from precomputed embeddings — the
-    module will skip the CLIP forward and only the trainable head/fusion live
-    on the device.
+    module skips the CLIP forward and only the trainable head/fusion live on
+    the device. Pass `freeze_encoder=False` for LoRA fine-tuning (online mode),
+    so the encoder forward runs with gradients enabled.
     """
     if condition == "R0b":
-        return VisionOnlyRegressor(clip_model)
-    return MultimodalRegressor(clip_model)
+        return VisionOnlyRegressor(clip_model, freeze_encoder=freeze_encoder)
+    return MultimodalRegressor(clip_model, freeze_encoder=freeze_encoder)

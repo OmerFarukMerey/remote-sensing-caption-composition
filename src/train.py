@@ -11,6 +11,7 @@ Two modes, transparently selected by `TrainConfig.precomputed_dir`:
 
 from __future__ import annotations
 
+import copy
 import math
 import random
 import time
@@ -26,6 +27,7 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader
 
 from .dataset import ARASDataset, PrecomputedARASDataset
+from .lora import inject_lora
 from .model import build_model
 
 
@@ -45,6 +47,14 @@ class TrainConfig:
     wandb_tags: list[str] = field(default_factory=list)
     checkpoint_dir: str = "checkpoints"
     precomputed_dir: Optional[str] = None  # if set, skip CLIP forward
+    # Phase 3 LoRA fine-tuning. When `lora` is True the encoder is unfrozen via
+    # low-rank adapters and training runs online (precomputed_dir is ignored,
+    # since cached embeddings become stale once the encoder learns).
+    lora: bool = False
+    lora_r: int = 8
+    lora_alpha: int = 16
+    lora_dropout: float = 0.05
+    lora_last_k: int = 6
 
 
 def _set_seed(seed: int):
@@ -115,9 +125,14 @@ def _run_epoch(model, loader, criterion, optimizer, device, condition, precomput
     return total / max(n, 1)
 
 
+def _use_precomputed(cfg: TrainConfig) -> bool:
+    # LoRA fine-tunes the encoder, so cached embeddings are invalid: force online.
+    return cfg.precomputed_dir is not None and not cfg.lora
+
+
 def _build_loaders(cfg: TrainConfig, csv_path, images_dir, image_transform, tokenizer, device):
     pin = device == "cuda"
-    if cfg.precomputed_dir is not None:
+    if _use_precomputed(cfg):
         train_ds = PrecomputedARASDataset(csv_path, cfg.precomputed_dir, "train", cfg.condition)
         val_ds = PrecomputedARASDataset(csv_path, cfg.precomputed_dir, "val", cfg.condition)
         collate = _collate_precomputed
@@ -160,17 +175,39 @@ def train_one_condition(
 ):
     """Train a single (condition, seed) and return per-epoch history + best ckpt path."""
     _set_seed(cfg.seed)
-    precomputed = cfg.precomputed_dir is not None
+    precomputed = _use_precomputed(cfg)
     train_loader, val_loader = _build_loaders(
         cfg, csv_path, images_dir, image_transform, tokenizer, device
     )
 
     # In precomputed mode CLIP isn't needed inside the model; build_model(None) leaves
-    # only the trainable layers on device.
-    model = build_model(cfg.condition, clip_model=None if precomputed else clip_model).to(device)
+    # only the trainable layers on device. LoRA needs the live encoder (online mode)
+    # with gradients flowing through the injected adapters.
+    if cfg.lora:
+        # Deep-copy so the shared clip_model isn't mutated across runs, then inject
+        # adapters before moving to device (LoRA params must land on `device` too).
+        encoder = copy.deepcopy(clip_model)
+        n_adapt = inject_lora(
+            encoder,
+            r=cfg.lora_r,
+            alpha=cfg.lora_alpha,
+            dropout=cfg.lora_dropout,
+            last_k_blocks=cfg.lora_last_k,
+            vision=True,
+            text=(cfg.condition != "R0b"),  # R0b has no text path
+        )
+        print(f"[lora] adapted {n_adapt} Linear layers")
+        model = build_model(cfg.condition, clip_model=encoder, freeze_encoder=False).to(device)
+    else:
+        model = build_model(
+            cfg.condition, clip_model=None if precomputed else clip_model
+        ).to(device)
+
     criterion = nn.MSELoss()
     optimizer = AdamW(model.trainable_parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
     scheduler = CosineAnnealingLR(optimizer, T_max=cfg.epochs)
+
+    tag = "-lora" if cfg.lora else ""
 
     run = None
     if cfg.use_wandb:
@@ -180,8 +217,8 @@ def train_one_condition(
             run = wandb.init(
                 project=cfg.wandb_project,
                 entity=cfg.wandb_entity,
-                name=f"{cfg.condition}_seed{cfg.seed}",
-                tags=[cfg.condition, f"seed{cfg.seed}"] + cfg.wandb_tags,
+                name=f"{cfg.condition}{tag}_seed{cfg.seed}",
+                tags=[cfg.condition, f"seed{cfg.seed}"] + (["lora"] if cfg.lora else []) + cfg.wandb_tags,
                 config={**cfg.__dict__, "device": device, "precomputed": precomputed},
                 reinit=True,
             )
@@ -191,7 +228,7 @@ def train_one_condition(
 
     ckpt_dir = Path(cfg.checkpoint_dir)
     ckpt_dir.mkdir(parents=True, exist_ok=True)
-    ckpt_path = ckpt_dir / f"{cfg.condition}_seed{cfg.seed}_best.pt"
+    ckpt_path = ckpt_dir / f"{cfg.condition}{tag}_seed{cfg.seed}_best.pt"
 
     best_val = math.inf
     best_epoch = -1
@@ -216,9 +253,13 @@ def train_one_condition(
                     "epoch": epoch,
                     "condition": cfg.condition,
                     "seed": cfg.seed,
+                    "lora": cfg.lora,
+                    # Keep fusion + head, plus LoRA adapters (they live under
+                    # clip_model.* but are the only trainable encoder params).
+                    # The frozen CLIP base weights are excluded to keep ckpts small.
                     "state_dict": {
                         k: v for k, v in model.state_dict().items()
-                        if not k.startswith("clip_model.")
+                        if not k.startswith("clip_model.") or "lora_" in k
                     },
                     "val_loss": val_loss,
                 },
