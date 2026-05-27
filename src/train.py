@@ -186,7 +186,9 @@ def train_one_condition(
     if cfg.lora:
         # Deep-copy so the shared clip_model isn't mutated across runs, then inject
         # adapters before moving to device (LoRA params must land on `device` too).
-        encoder = copy.deepcopy(clip_model)
+        # Fine-tune in fp32: CLIP may be fp16 on some backends, and fp16
+        # fine-tuning without loss scaling is unstable.
+        encoder = copy.deepcopy(clip_model).float()
         n_adapt = inject_lora(
             encoder,
             r=cfg.lora_r,

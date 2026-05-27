@@ -234,3 +234,6 @@ wandb/
 *.zip
 
 DI_725_Term_Project.pdf
+
+# Internal project notes (not for the public repo)
+PROJECT_JOURNEY.md

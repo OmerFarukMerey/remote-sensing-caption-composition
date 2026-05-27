@@ -60,7 +60,7 @@ def predict_split(
 
         ds = ARASDataset(csv_path, images_dir, split, condition, image_transform, tokenizer)
         loader = DataLoader(ds, batch_size=batch_size, shuffle=False, collate_fn=_collate_online)
-        encoder = _copy.deepcopy(clip_model)
+        encoder = _copy.deepcopy(clip_model).float()  # match fp32 LoRA training
         inject_lora(
             encoder, r=lora_r, alpha=lora_alpha, dropout=0.0,
             last_k_blocks=lora_last_k, vision=True, text=(condition != "R0b"),

@@ -52,7 +52,11 @@ class LoRALinear(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         out = self.base(x)
-        update = (self.lora_dropout(x) @ self.lora_A.t()) @ self.lora_B.t()
+        # Match the adapter matmul to the input dtype (CLIP may run in fp16 on
+        # some backends while the LoRA params are fp32), then cast back.
+        a = self.lora_A.t().to(x.dtype)
+        b = self.lora_B.t().to(x.dtype)
+        update = (self.lora_dropout(x) @ a) @ b
         return out + update.to(out.dtype) * self.scaling
 
 
