@@ -55,6 +55,7 @@ class TrainConfig:
     lora_alpha: int = 16
     lora_dropout: float = 0.05
     lora_last_k: int = 6
+    grad_clip: Optional[float] = None  # max grad-norm; stabilises LoRA fine-tuning
 
 
 def _set_seed(seed: int):
@@ -107,7 +108,8 @@ def _forward(model, batch, device, condition, precomputed: bool):
     return pred, gt
 
 
-def _run_epoch(model, loader, criterion, optimizer, device, condition, precomputed, train: bool):
+def _run_epoch(model, loader, criterion, optimizer, device, condition, precomputed,
+               train: bool, grad_clip: Optional[float] = None):
     model.train(train)
     total, n = 0.0, 0
     ctx = torch.enable_grad() if train else torch.no_grad()
@@ -118,6 +120,9 @@ def _run_epoch(model, loader, criterion, optimizer, device, condition, precomput
             if train:
                 optimizer.zero_grad(set_to_none=True)
                 loss.backward()
+                if grad_clip is not None:
+                    params = [p for g in optimizer.param_groups for p in g["params"]]
+                    torch.nn.utils.clip_grad_norm_(params, grad_clip)
                 optimizer.step()
             bs = gt.size(0)
             total += loss.item() * bs
@@ -239,10 +244,12 @@ def train_one_condition(
     for epoch in range(cfg.epochs):
         t0 = time.time()
         train_loss = _run_epoch(
-            model, train_loader, criterion, optimizer, device, cfg.condition, precomputed, train=True
+            model, train_loader, criterion, optimizer, device, cfg.condition, precomputed,
+            train=True, grad_clip=cfg.grad_clip,
         )
         val_loss = _run_epoch(
-            model, val_loader, criterion, optimizer, device, cfg.condition, precomputed, train=False
+            model, val_loader, criterion, optimizer, device, cfg.condition, precomputed,
+            train=False,
         )
         scheduler.step()
 
