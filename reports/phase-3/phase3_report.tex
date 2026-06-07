@@ -33,7 +33,7 @@ numeric sanitization. We evaluate an information-richness axis (empty caption,
 no-text floor, keywords, two qualitative captions, random text) with frozen
 CLIP encoders, then introduce the project's principal ablation: unfreezing the
 encoder via LoRA. Three results emerge. (1) With frozen encoders, the
-cross-attention block --- not the text --- drives the gain, and clean captions
+cross-attention block (not the text) drives the gain, and clean captions
 help only when they correctly describe the image (a fidelity-conditional effect
 that averages near zero). (2) LoRA fine-tuning lowers test MSE by 32--60\,\%
 and \emph{reverses the architectural story}: once the encoder adapts, the
@@ -69,8 +69,8 @@ narrative. We therefore restrict text to the two \texttt{vision\_*} captions
 filter.
 
 \textbf{Research question.} \emph{How does the semantic richness of auxiliary
-text captions --- from a vision-only baseline, to keywords, to detailed
-qualitative descriptions --- impact land-cover composition regression while
+text captions, from a vision-only baseline, to keywords, to detailed
+qualitative descriptions, impact land-cover composition regression while
 strictly avoiding data leakage, and how does this change when the visual
 encoder is allowed to adapt?}
 
@@ -88,7 +88,7 @@ the leakage failure mode.
 CLIP~\cite{clip} aligns image and text via contrastive pretraining; its
 adaptation to remote sensing is studied in RemoteCLIP~\cite{remoteclip} and
 RS5M~\cite{rs5m}, which report that domain adaptation of the encoder is the
-dominant lever for downstream gains --- consistent with our LoRA findings.
+dominant lever for downstream gains, consistent with our LoRA findings.
 Cross-attention fusion has been shown to outperform late fusion in
 remote-sensing segmentation~\cite{ftransunet}; we find that this advantage is
 contingent on the encoder being frozen. Parameter-efficient fine-tuning via
@@ -147,13 +147,13 @@ untouched because \texttt{nn.MultiheadAttention} bypasses its module forward.
 Only the adapters, the cross-attention block, and the head are trained
 ($\sim$1.4\,M parameters); the CLIP base stays frozen. We fine-tune in fp32 and
 apply gradient clipping (max-norm 1.0), which removed a divergence observed for
-the empty-caption (R0a) condition --- the lowest-signal case for the fusion
+the empty-caption (R0a) condition, the lowest-signal case for the fusion
 layer. We re-train R0a, R0b, and R2b with LoRA and compare against their frozen
 counterparts.
 
 \subsection{Leakage quantification}
 \texttt{Rleak} trains on the raw, unsanitized \texttt{hybrid\_gemma3-4b}
-caption (percentages intact) as a controlled negative control --- a failure
+caption (percentages intact) as a controlled negative control, a failure
 mode to measure, not a method to advocate.
 
 \subsection{Training and reproducibility}
@@ -244,7 +244,7 @@ pure-vision R0b benefits most and becomes the best model.}
 \end{figure}
 
 \subsection{Leakage quantification}
-\texttt{Rleak} attains test MSE $0.00143\pm0.0001$ --- about one third of the
+\texttt{Rleak} attains test MSE $0.00143\pm0.0001$, about one third of the
 best leakage-free model (R0b-lora, $0.00435$) and one fifth of the frozen R0a
 baseline (Fig.~\ref{fig:leak}). The model recovers the targets almost directly
 from the percentages in the text.
@@ -269,7 +269,7 @@ MSE far below the leakage-free conditions.}
 \label{sec:disc}
 
 \textbf{Frozen regime: architecture, not text.} The dominant frozen effect is
-architectural --- the cross-attention block, even with an empty caption, gives
+architectural, the cross-attention block, even with an empty caption, gives
 a $\sim$36\,\% lower MSE than the pure-vision floor. Without an
 architecture-matched no-text baseline (R0b) this would have been miscredited to
 the text. Clean captions provide only a fidelity-conditional benefit
@@ -282,8 +282,8 @@ that the frozen-regime conclusion is regime-dependent. Once LoRA lets the
 visual encoder adapt, the pure-vision model (R0b-lora, $0.00435$) overtakes the
 cross-attention conditions (R0a-lora $0.00478$, R2b-lora $0.00466$): the fusion
 layer's contribution in the frozen regime was effectively a capacity
-substitute for a non-adapted encoder, and it becomes redundant --- even mildly
-harmful over an empty/degenerate text path --- once the encoder itself can
+substitute for a non-adapted encoder, and it becomes redundant, even mildly
+harmful over an empty/degenerate text path, once the encoder itself can
 learn. This aligns with RemoteCLIP/RS5M~\cite{remoteclip,rs5m}, where encoder
 domain-adaptation is the dominant lever, and qualifies the cross-attention
 advantage reported for frozen fusion in~\cite{ftransunet}. The caption signal
